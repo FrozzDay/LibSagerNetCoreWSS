@@ -42,6 +42,7 @@ type Tun2ray struct {
 	dev                 tun.Tun
 	router              string
 	v2ray               *V2RayInstance
+	fakedns             bool
 	sniffing            bool
 	overrideDestination bool
 	debug               bool
@@ -68,6 +69,7 @@ type TunConfig struct {
 	BindUpstream        Protector
 	IPv6Mode            int32
 	Implementation      int32
+	FakeDNS             bool
 	Sniffing            bool
 	OverrideDestination bool
 	Debug               bool
@@ -93,6 +95,7 @@ func NewTun2ray(config *TunConfig) (*Tun2ray, error) {
 		v2ray:               config.V2Ray,
 		sniffing:            config.Sniffing,
 		overrideDestination: config.OverrideDestination,
+		fakedns:             config.FakeDNS,
 		debug:               config.Debug,
 		dumpUid:             config.DumpUID,
 		trafficStats:        config.TrafficStats,
@@ -129,12 +132,26 @@ func NewTun2ray(config *TunConfig) (*Tun2ray, error) {
 	}
 
 	dc := config.V2Ray.dnsClient
-	internet.UseAlternativeSystemDialer(&protectedDialer{
-		protector: config.Protector,
-		resolver: func(domain string) ([]net.IP, error) {
-			return dc.LookupIP(domain)
-		},
-	})
+	if c, ok := dc.(dns.ClientWithIPOption); ok {
+		if config.FakeDNS {
+			c.SetFakeDNSOption(true)
+			_, _ = dc.LookupIP("placeholder")
+		}
+		internet.UseAlternativeSystemDialer(&protectedDialer{
+			protector: config.Protector,
+			resolver: func(domain string) ([]net.IP, error) {
+				c.SetFakeDNSOption(false) // Skip FakeDNS
+				return dc.LookupIP(domain)
+			},
+		})
+	} else {
+		internet.UseAlternativeSystemDialer(&protectedDialer{
+			protector: config.Protector,
+			resolver: func(domain string) ([]net.IP, error) {
+				return dc.LookupIP(domain)
+			},
+		})
+	}
 	if config.BindUpstream != nil {
 		pingproto.ControlFunc = func(fd uintptr) {
 			config.BindUpstream.Protect(int32(fd))
@@ -244,10 +261,14 @@ func (t *Tun2ray) NewConnection(source v2rayNet.Destination, destination v2rayNe
 	ctx := core.WithContext(context.Background(), t.v2ray.core)
 	ctx = session.ContextWithInbound(ctx, inbound)
 
-	if !isDns && t.sniffing {
+	if !isDns && (t.sniffing || t.fakedns) {
 		req := session.SniffingRequest{
-			Enabled:   true,
-			RouteOnly: !t.overrideDestination,
+			Enabled:      true,
+			MetadataOnly: t.fakedns && !t.sniffing,
+			RouteOnly:    !t.overrideDestination,
+		}
+		if t.fakedns {
+			req.OverrideDestinationForProtocol = append(req.OverrideDestinationForProtocol, "fakedns")
 		}
 		if t.sniffing {
 			req.OverrideDestinationForProtocol = append(req.OverrideDestinationForProtocol, "http", "tls")
@@ -401,10 +422,14 @@ func (t *Tun2ray) NewPacket(source v2rayNet.Destination, destination v2rayNet.De
 	ctx := core.WithContext(context.Background(), t.v2ray.core)
 	ctx = session.ContextWithInbound(ctx, inbound)
 
-	if !isDns && t.sniffing {
+	if !isDns && (t.sniffing || t.fakedns) {
 		req := session.SniffingRequest{
-			Enabled:   true,
-			RouteOnly: !t.overrideDestination,
+			Enabled:      true,
+			MetadataOnly: t.fakedns && !t.sniffing,
+			RouteOnly:    !t.overrideDestination,
+		}
+		if t.fakedns {
+			req.OverrideDestinationForProtocol = append(req.OverrideDestinationForProtocol, "fakedns")
 		}
 		if t.sniffing {
 			req.OverrideDestinationForProtocol = append(req.OverrideDestinationForProtocol, "quic")
