@@ -29,6 +29,7 @@ import (
 	routing_session "github.com/v2fly/v2ray-core/v5/features/routing/session"
 	"github.com/v2fly/v2ray-core/v5/proxy/wireguard"
 	"github.com/v2fly/v2ray-core/v5/transport/internet"
+	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
 	"libcore/comm"
 	"libcore/gvisor"
@@ -43,6 +44,7 @@ type Tun2ray struct {
 	router              string
 	v2ray               *V2RayInstance
 	fakedns             bool
+	hijackDns           bool
 	sniffing            bool
 	overrideDestination bool
 	debug               bool
@@ -70,6 +72,7 @@ type TunConfig struct {
 	IPv6Mode            int32
 	Implementation      int32
 	FakeDNS             bool
+	HijackDNS           bool
 	Sniffing            bool
 	OverrideDestination bool
 	Debug               bool
@@ -96,6 +99,7 @@ func NewTun2ray(config *TunConfig) (*Tun2ray, error) {
 		sniffing:            config.Sniffing,
 		overrideDestination: config.OverrideDestination,
 		fakedns:             config.FakeDNS,
+		hijackDns:           config.HijackDNS,
 		debug:               config.Debug,
 		dumpUid:             config.DumpUID,
 		trafficStats:        config.TrafficStats,
@@ -226,6 +230,11 @@ func (t *Tun2ray) NewConnection(source v2rayNet.Destination, destination v2rayNe
 	}
 
 	isDns := destination.Address.String() == t.router
+	/*
+		if !isDns && t.hijackDns {
+			isDns = destination.Port == 53
+		}
+	*/
 	if isDns {
 		inbound.Tag = "dns-in"
 	}
@@ -368,6 +377,13 @@ func (t *Tun2ray) NewPacket(source v2rayNet.Destination, destination v2rayNet.De
 	}
 	isDns := destination.Address.String() == t.router
 
+	if !isDns && t.hijackDns {
+		var parser dnsmessage.Parser
+		if _, err := parser.Start(data.Bytes()); err == nil {
+			question, err := parser.Question()
+			isDns = err == nil && question.Class == dnsmessage.ClassINET && (question.Type == dnsmessage.TypeA || question.Type == dnsmessage.TypeAAAA)
+		}
+	}
 	if isDns {
 		inbound.Tag = "dns-in"
 	}
