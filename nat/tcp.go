@@ -37,7 +37,7 @@ func newTcpForwarder(tun *SystemTun) (*tcpForwarder, error) {
 	addr := listener.Addr().(*net.TCPAddr)
 	port := uint16(addr.Port)
 	newError("tcp forwarder started at ", addr).AtDebug().WriteToLog()
-	return &tcpForwarder{tun, port, listener, cache.NewLRUCache(
+	return &tcpForwarder{tun, port, listener, cache.New(
 		cache.WithAge(300),
 		cache.WithUpdateAgeOnGet(),
 	)}, nil
