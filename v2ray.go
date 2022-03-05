@@ -43,7 +43,7 @@ type V2RayInstance struct {
 	outboundManager outbound.Manager
 	statsManager    stats.Manager
 	observatory     features.TaggedFeatures
-	dnsClient       dns.NewClient
+	dnsClient       dns.Client
 }
 
 func NewV2rayInstance() *V2RayInstance {
@@ -118,7 +118,7 @@ func (instance *V2RayInstance) LoadConfig(content string) error {
 	instance.router = c.GetFeature(routing.RouterType()).(routing.Router)
 	instance.outboundManager = c.GetFeature(outbound.ManagerType()).(outbound.Manager)
 	instance.dispatcher = c.GetFeature(routing.DispatcherType()).(routing.Dispatcher)
-	instance.dnsClient = c.GetFeature(dns.ClientType()).(dns.NewClient)
+	instance.dnsClient = c.GetFeature(dns.ClientType()).(dns.Client)
 
 	o := c.GetFeature(extension.ObservatoryType())
 	if o != nil {

@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,10 +18,12 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/v2fly/v2ray-core/v5"
 	appOutbound "github.com/v2fly/v2ray-core/v5/app/proxyman/outbound"
+	"github.com/v2fly/v2ray-core/v5/common"
 	"github.com/v2fly/v2ray-core/v5/common/buf"
 	v2rayNet "github.com/v2fly/v2ray-core/v5/common/net"
 	"github.com/v2fly/v2ray-core/v5/common/net/pingproto"
 	"github.com/v2fly/v2ray-core/v5/common/session"
+	"github.com/v2fly/v2ray-core/v5/features/dns"
 	"github.com/v2fly/v2ray-core/v5/features/dns/localdns"
 	"github.com/v2fly/v2ray-core/v5/features/outbound"
 	routing_session "github.com/v2fly/v2ray-core/v5/features/routing/session"
@@ -71,6 +75,7 @@ type TunConfig struct {
 	TrafficStats        bool
 	PCap                bool
 	ErrorHandler        ErrorHandler
+	LocalResolver       LocalResolver
 }
 
 type ErrorHandler interface {
@@ -126,9 +131,8 @@ func NewTun2ray(config *TunConfig) (*Tun2ray, error) {
 	dc := config.V2Ray.dnsClient
 	internet.UseAlternativeSystemDialer(&protectedDialer{
 		protector: config.Protector,
-		resolver: func(ctx context.Context, domain string) ([]net.IP, error) {
-			ips, _, err := dc.LookupDefault(ctx, domain)
-			return ips, err
+		resolver: func(domain string) ([]net.IP, error) {
+			return dc.LookupIP(domain)
 		},
 	})
 	if config.BindUpstream != nil {
@@ -147,21 +151,49 @@ func NewTun2ray(config *TunConfig) (*Tun2ray, error) {
 		}
 	}
 
+	if !config.Protect {
+		localdns.SetLookupFunc(nil)
+	} else {
+		localdns.SetLookupFunc(func(network, host string) ([]net.IP, error) {
+			response, err := config.LocalResolver.LookupIP(network, host)
+			if err != nil {
+				errStr := err.Error()
+				if strings.HasPrefix(errStr, "rcode") {
+					r, _ := strconv.Atoi(strings.Split(errStr, " ")[1])
+					return nil, dns.RCodeError(r)
+				}
+				return nil, err
+			}
+			addrs := common.Filter(strings.Split(response, ","), func(it string) bool {
+				return common.IsNotBlank(it)
+			})
+			ips := make([]net.IP, len(addrs))
+			for i, addr := range addrs {
+				ips[i] = net.ParseIP(addr)
+			}
+			if len(ips) == 0 {
+				return nil, dns.ErrEmptyResponse
+			}
+
+			return ips, nil
+		})
+	}
+
 	internet.UseAlternativeSystemDNSDialer(&protectedDialer{
 		protector: config.Protector,
-		resolver: func(ctx context.Context, domain string) ([]net.IP, error) {
-			ips, _, err := localdns.Client().LookupDefault(ctx, domain)
-			return ips, err
+		resolver: func(domain string) ([]net.IP, error) {
+			return localdns.Instance.LookupIP(domain)
 		},
 	})
 
+	net.DefaultResolver.Dial = t.dialDNS
 	return t, nil
 }
 
 func (t *Tun2ray) Close() {
+	net.DefaultResolver.Dial = nil
 	pingproto.ControlFunc = nil
-	internet.UseAlternativeSystemDialer(nil)
-	internet.UseAlternativeSystemDNSDialer(nil)
+	localdns.SetLookupFunc(nil)
 	comm.CloseIgnore(t.dev)
 }
 
@@ -563,4 +595,18 @@ func (t *Tun2ray) NewPingPacket(source v2rayNet.Destination, destination v2rayNe
 	}()
 
 	return true
+}
+
+func (t *Tun2ray) dialDNS(ctx context.Context, _, _ string) (conn net.Conn, err error) {
+	conn, err = t.v2ray.dialContext(session.ContextWithInbound(ctx, &session.Inbound{
+		Tag: "dns-in",
+	}), v2rayNet.Destination{
+		Network: v2rayNet.Network_UDP,
+		Address: v2rayNet.ParseAddress(t.router),
+		Port:    53,
+	})
+	if err == nil {
+		conn = &pinnedPacketConn{conn}
+	}
+	return
 }
