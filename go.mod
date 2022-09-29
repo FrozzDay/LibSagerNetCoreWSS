@@ -23,7 +23,7 @@ replace gvisor.dev/gvisor => github.com/sagernet/gvisor v0.0.0-20220402114650-76
 
 //replace github.com/v2fly/v2ray-core/v5 => ../v2ray-core
 
-replace github.com/v2fly/v2ray-core/v5 => github.com/dyhkwong/v2ray-core/v5 v5.0.2-0.20220911072729-4903f3c5f849
+replace github.com/v2fly/v2ray-core/v5 => github.com/FrozzDay/v2ray-coreWSS/v5 v5.0.2-0.20220911072729-4903f3c5f849
 
 //replace github.com/sagernet/sing => ../sing
 
